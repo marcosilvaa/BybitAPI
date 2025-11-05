@@ -11,10 +11,10 @@ load_dotenv()
 class MarketData:
 
     def __init__(self):
-        self.base_url = os.getenv('BASE_URL')
+        self.base_url = os.getenv('BASE_URL_BYBIT')
     
     def server_time(self):
-        self.base_url = os.getenv("BASE_URL")
+        self.base_url = os.getenv("BASE_URL_BYBIT")
         
         endpoint = self.base_url + 'market/time'
         
@@ -106,7 +106,7 @@ class MarketData:
         self.category = category
         self.interval = interval
         self.limit = limit
-        self.base_url = os.getenv('BASE_URL')
+        self.base_url = os.getenv('BASE_URL_BYBIT')
         self.start = start
         self.end = end
         self.endpoint = endpoint
@@ -155,7 +155,7 @@ class MarketData:
     def orderbook(self, category:str = 'spot', symbol:str='BTCUSDT'):
         self.category = category
         self.symbol = symbol
-        self.base_url = os.getenv('BASE_URL')
+        self.base_url = os.getenv('BASE_URL_BYBIT')
         
         params = {
             'category': self.category,
@@ -200,7 +200,7 @@ class MarketData:
     def tickers(self, category:str='spot', symbol:str='BTCUSDT'):
         self.category = category
         self.symbol = symbol
-        self.base_url = os.getenv('BASE_URL')
+        self.base_url = os.getenv('BASE_URL_BYBIT')
         
         params = {
             'category': self.category,
@@ -228,7 +228,7 @@ class MarketData:
     def funding_rate(self, category:str='linear', symbol:str='BTCUSDT'):
         self.category = category
         self.symbol = symbol
-        self.base_url = os.getenv('BASE_URL')
+        self.base_url = os.getenv('BASE_URL_BYBIT')
         
         params = {
             'category': self.category,
@@ -252,7 +252,7 @@ class MarketData:
     def recent_trades(self, category:str='linear', symbol:str='BTCUSDT'):
         self.category = category
         self.symbol = symbol
-        self.base_url = os.getenv('BASE_URL')
+        self.base_url = os.getenv('BASE_URL_BYBIT')
         
         params = {
             'category': self.category,
