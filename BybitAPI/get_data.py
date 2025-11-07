@@ -1,52 +1,70 @@
-import requests
-from datetime import datetime
-import pandas as pd
-import numpy as np
 import os
-from dotenv import load_dotenv
-from datetime import datetime, timezone
+import requests
+import pandas as pd
+from tqdm import tqdm
 from typing import Optional, Union
+from datetime import datetime, timezone
+import time
+
+from dotenv import load_dotenv
 load_dotenv() 
 
 class MarketData:
+    """
+    Wrapper para os endpoins da API Bybit (market data).
+    """
+
+    # ------------------------------------------------------------------
+    # 1️⃣  Intervalos aceitos pela API (valor → passo para avançar)
+    # ------------------------------------------------------------------
+    _VALID_INTERVALS = {
+        "1":   pd.Timedelta(minutes=1),
+        "3":   pd.Timedelta(minutes=3),
+        "5":   pd.Timedelta(minutes=5),
+        "15":  pd.Timedelta(minutes=15),
+        "30":  pd.Timedelta(minutes=30),
+        "60":  pd.Timedelta(minutes=60),
+        "120": pd.Timedelta(minutes=120),
+        "240": pd.Timedelta(minutes=240),
+        "360": pd.Timedelta(minutes=360),
+        "720": pd.Timedelta(minutes=720),
+        "D":   pd.Timedelta(days=1),
+        "W":   pd.Timedelta(weeks=1),
+        "M":   pd.DateOffset(months=1),         
+    }
+
 
     def __init__(self):
         self.base_url = os.getenv('BASE_URL_BYBIT')
+        
     
     def server_time(self):
-        self.base_url = os.getenv("BASE_URL_BYBIT")
-        
-        endpoint = self.base_url + 'market/time'
-        
-        r=requests.get(endpoint)
+        endpoint = self.base_url + 'market/time'    
+        r = requests.get(endpoint)
         r.raise_for_status()
         data = r.json()
-        
         if data['retCode'] == 0:
-#            df = pd.DataFrame(data['result'], columns=['timeSecond','timeNano'])
-            time = data['time']
-            return time
+            return data['time']
         else:
             raise Exception(f'Erro ao obter `server time`: {data['retMsg']}')
 
-    def symbols_list(self, category: str='spot'): 
-        self.category = category
 
+    def symbols_list(self, category: str='spot'): 
         url = f'{self.base_url}market/instruments-info'
-        params = {"category": self.category}
-        
-        r = requests.get(url, params=params)
+        r = requests.get(url, params={"category": category})
         r.raise_for_status()
         data = r.json()
-        
         if data['retCode'] == 0:
-            df = pd.DataFrame(data['result']['list'])
-            return df
+            return pd.DataFrame(data['result']['list'])
         else:
             raise Exception(f'Erro ao obter símbolos: {data['retMsg']}')
+
         
     @staticmethod
     def _to_ms(ts: Optional[Union[int, str, datetime]]):
+        '''
+        Converte timestamp em milissegundos (UTC).
+        '''
         if ts is None:
             return None
         if isinstance(ts, int):
@@ -102,15 +120,6 @@ class MarketData:
             ``Open, High, Low, Close, Volume``.
         """
         
-        self.symbol = symbol
-        self.category = category
-        self.interval = interval
-        self.limit = limit
-        self.base_url = os.getenv('BASE_URL_BYBIT')
-        self.start = start
-        self.end = end
-        self.endpoint = endpoint
-        
         if not (1 <= limit <= 1000):
             raise ValueError("limit deve estar entre 1 e 1000")
         
@@ -120,56 +129,169 @@ class MarketData:
         if start_ms is not None and end_ms is not None and start_ms > end_ms:
             raise ValueError("Start deve ser anterior ou igual a End")
         
-        endpoint = self.base_url + "market/" + self.endpoint
-        
+        endpoint_url =  f"{self.base_url}market/{endpoint}"
         params = {
-            "category": self.category,
-            "symbol": self.symbol,
-            'interval': self.interval,
-            "limit": self.limit            
+            "category": category,
+            "symbol": symbol,
+            'interval': interval,
+            "limit": limit
         }
         if start_ms is not None:
             params['start'] = start_ms
         if end_ms is not None:
             params['end'] = end_ms
-        
-        
-        r = requests.get(endpoint, params=params)
+
+        r = requests.get(endpoint_url, params=params)
         r.raise_for_status()
         data = r.json()
         
         if data['retCode'] == 0:
             df = pd.DataFrame(data['result']['list'], columns=['Date','Open','High','Low','Close','Volume','Turnover'])
             df = df.drop(columns=['Turnover'], axis=1)
-            df[['Date','Open', 'High', 'Low', 'Close', 'Volume']] = df[['Date','Open', 'High', 'Low', 'Close', 'Volume']].astype("float")
+            df[['Date','Open', 'High', 'Low', 'Close', 'Volume']] = \
+                df[['Date','Open', 'High', 'Low', 'Close', 'Volume']].astype("float")
             df = df.set_index(df.Date, drop=True)
-            df = df.sort_index()
             df.index = pd.to_datetime(df.index, unit='ms').tz_localize('UTC').tz_convert('America/Sao_Paulo')
+            df = df.sort_index()
             df = df.drop(columns=['Date'])
             return df
-        
         else:
             raise Exception(f'Erro: {data['retMsg']}')
             
             
+    def full_data(
+        self,
+        symbol: str='BTCUSDT',
+        start: str = '2021-01-01 00:00:00-03:00',
+        interval: str= 'D',
+        category: str='spot',
+        pause: float=0.2
+    ) -> pd.DataFrame:
+        """
+        Coleta dados OHLCV completos desde `start` até o presente.
+
+        Parameters
+        ----------
+        symbol : str, default ``BTCUSDT``.
+            Par de negociação a ser coletado.
+            
+        start : str
+            Timestamp inicial (ISO 8601). Obrigatório. API nao aceita start=None.
+            Ex.: ``2021-01-01 00:00:00-03:00``.
+            
+        interval : str, default ``D``.
+            Intervalos permitidos:
+            ``1`` · ``3`` · ``5`` · ``15`` · ``30`` · ``60`` · ``120`` ·
+            ``240`` · ``360`` · ``720`` · ``D`` · ``W`` · ``M``.
+        
+        category : str, default ``spot``.
+            ``spot``, ``linear`` ou ``inverse``.
+        
+        pause : float, default ``0.2``.
+            Tempo de espera (em segundos) entre requisições.
+            
+        Returns
+        -------
+        pd.DataFrame
+            Índice datetime (UTC → America/Sao_Paulo) e colunas
+            ``Open, High, Low, Close, Volume``.
+            
+        Raises
+        ------
+        ValueError
+            Se ``interval`` não estiver na lista de intervalos permitidos ou
+            se ``start`` for ``None``.
+        """
+        
+        # Validações iniciais
+        if interval not in self._VALID_INTERVALS:
+            valid = ', '.join(sorted(self._VALID_INTERVALS.keys()))
+            raise ValueError(
+                f"Intervalo inválido: {interval}. Intervalos válidos são: {valid}")
+            
+        step = self._VALID_INTERVALS[interval]
+        
+        if start is None:
+            raise ValueError("O parâmetro 'start' é obrigatório.")
+
+        # Conversao de data de partida para Timestamp com fuso da API
+        
+        # O Método prie_data() converte o parametro 'start' para ms UTC
+        # usando _to_ms(), que aceita strings com ISO com offset. 
+        # Aqui usamos apenas pandas para fazer a aritmetica do incremento
+        cur = pd.Timestamp(start)
+        # Se a string nao trouxer timzone, assuma UTC (consistente com _to_ms)
+        if cur.tzinfo is None:
+            cur = cur.tz_localize('UTC')
+        # Convertemos para o fuso usado internamenteo pelos DataFrames retornados
+        cur = cur.tz_convert('America/Sao_Paulo')
+        
+        # Loop de coleta
+        blocks: list[pd.DataFrame] = []
+        try:
+            iterator = tqdm(desc='Coletando dados', unit='blocos')
+        except Exception:
+            iterator = None 
+        
+        while True:
+            # Chamada da API
+            df = self.price_data(
+                symbol=symbol,
+                category=category,
+                interval=interval,
+                limit=1000,
+                start=cur.isoformat(),
+                endpoint='kline'
+            )
+            if df.empty:
+                break
+            blocks.append(df)
+            
+            # Se o bloco retornou menos que 1000 linhas, chegou ao fim
+            if len(df) < 1000:
+                break
+            
+            # Ultimo timestamp coletado
+            ultimo_ts = df.index[-1]
+
+            # Proxima chamada: ultimo candle + passo (para nao duplicar)
+            cur = ultimo_ts + step
+            
+            # Seguranca contra loops infinitos (caso a API devolva o mesmo lote)
+            if cur <= ultimo_ts:
+                break
+            
+            # Pausa opicional para respeitar  rate-limit da API
+            if pause:
+                time.sleep(pause)
+                
+            if iterator is not None:
+                iterator.update(1)
+                iterator.set_postfix({'Último': str(ultimo_ts)})
+            
+        if iterator is not None:
+            iterator.close()
+        
+        # Concatena, elimina duplucatas e devolve o df
+        if not blocks:
+            return "Nenhum dado coletado", pd.DataFrame()
+        
+        full = pd.concat(blocks)
+        full = full[~full.index.duplicated(keep='first')]
+        full = full.sort_index()
+        return full 
+            
+        
     def orderbook(self, category:str = 'spot', symbol:str='BTCUSDT'):
-        self.category = category
-        self.symbol = symbol
-        self.base_url = os.getenv('BASE_URL_BYBIT')
-        
         params = {
-            'category': self.category,
-            'symbol': self.symbol
+            'category': category,
+            'symbol': symbol
         }
-        
-        endpoint = self.base_url + 'market/orderbook'
-        
-        r = requests.get(endpoint, params=params)
+        endpoint_url = self.base_url + 'market/orderbook'
+        r = requests.get(endpoint_url, params=params)
         r.raise_for_status()
         data = r.json()
-        
         result = data["result"]
-
         if data['retCode'] == 0:
             # -------------------- conversões --------------------
             # timestamp em milissegundos → Timestamp UTC do pandas
